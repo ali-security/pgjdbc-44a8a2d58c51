@@ -32,6 +32,7 @@ import java.io.PrintWriter;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
+import java.sql.Connection;
 import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -193,6 +194,57 @@ public class PreparedStatementTest extends BaseTest4 {
     // Total Bind message length too long.
     is = new ByteArrayInputStream(buf);
     runBrokenStream(is, Integer.MAX_VALUE);
+  }
+
+  /**
+   * A stream that throws an unchecked exception while the Bind message is being sent must not
+   * leave a partial message in the send buffer of a connection that is reused afterwards.
+   */
+  @Test
+  public void testUncheckedExceptionFromStreamDoesNotReuseConnection() throws Exception {
+    final byte[] data = new byte[1024];
+    InputStream failing = new ByteArrayInputStream(data) {
+      @Override
+      public synchronized int read(byte[] b, int off, int len) {
+        if (pos >= data.length / 2) {
+          throw new IllegalStateException("stream failure");
+        }
+        return super.read(b, off, Math.min(len, data.length / 2 - pos));
+      }
+
+      @Override
+      public synchronized int read() {
+        if (pos >= data.length / 2) {
+          throw new IllegalStateException("stream failure");
+        }
+        return super.read();
+      }
+    };
+    Connection conn = TestUtil.openDB();
+    try {
+      PreparedStatement pstmt =
+          conn.prepareStatement("INSERT INTO streamtable (bin,str) VALUES (?,?)");
+      pstmt.setBinaryStream(1, failing, data.length);
+      pstmt.setString(2, "Other");
+      try {
+        pstmt.executeUpdate();
+        fail("This isn't supposed to work.");
+      } catch (SQLException e) {
+        // Reported as a bind failure: the connection must still be in sync.
+        assertFalse(conn.isClosed());
+        Statement stmt = conn.createStatement();
+        ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM streamtable");
+        assertTrue(rs.next());
+        assertEquals(0, rs.getInt(1));
+        rs.close();
+        stmt.close();
+      } catch (IllegalStateException e) {
+        // The partially sent message cannot be completed, so the connection must be closed.
+        assertTrue("connection must be closed after an unchecked exception", conn.isClosed());
+      }
+    } finally {
+      conn.close();
+    }
   }
 
   private void runBrokenStream(InputStream is, int length) throws SQLException {
