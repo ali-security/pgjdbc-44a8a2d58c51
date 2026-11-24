@@ -8,8 +8,18 @@ branches:
     - /^REL.*/
 
 before_script:
-  - psql -c "create user test with password 'test'" -U postgres
-  - psql -c 'create database test owner test;' -U postgres
+  # The Travis image no longer provisions old PostgreSQL servers via addons, so start the
+  # server the same way the project's GitHub CI does: docker/postgres-server (which also
+  # creates the test user, the test database and the hstore/sslinfo extensions)
+  - docker compose version
+  # the image runs its own PostgreSQL on 5432; free the port for the container
+  - sudo systemctl stop postgresql
+  # replicas on 5433/5434 serve the multi-host tests; the server is started with SSL, so enable the SSL tests
+  - cd docker/postgres-server && PGV=$PG_VERSION CREATE_REPLICAS=yes docker compose up -d && cd ../..
+  - echo "enable_ssl_tests=true" > ssltest.local.properties
+  - for i in $(seq 1 90); do pg_isready -h localhost -p 5432 -U postgres && break; sleep 2; done
+  - pg_isready -h localhost -p 5432 -U postgres
+  - (cd docker/postgres-server && docker compose logs)
 
 env:
   global:
@@ -20,9 +30,11 @@ before_install:
 
 script:
   # make sure previous build artifacts are not used for subsequent builds
-  - rm -rf $HOME/.m2/repository/org/postgresql || true
+  - rm -rf $HOME/.m2/repository/org/postgresql
   - ./.travis/travis_build.sh
   - ./.travis/travis_check_postgres_health.sh
+  # name every skipped test and the reason it was skipped
+  - SEAL_LEG="Travis PG $PG_VERSION, SSL and replicas enabled; Replication-tagged tests excluded by -PskipReplicationTests and SlowTests by includeTestTags (both upstream travis_build.sh defaults)" python3 .github/seal-skip-report.py pgjdbc
   # To avoid useless S3 cache updates (https://github.com/travis-ci/travis-ci/issues/1441#issuecomment-67607074)
   #- mkdir /tmp/cache-trick
   #- mv $HOME/.m2/repository/org/postgresql /tmp/cache-trick/
@@ -50,8 +62,6 @@ cache:
 matrix:
   fast_finish: true
   include:
-    - addons:
-        postgresql: "9.6"
-      env:
-        - PG_VERSION=9.6
-        - TEST_CLIENTS=Y
+    - env:
+        - PG_VERSION=14
+        - MVN_CUSTOM_ARGS=-PskipForbiddenApis

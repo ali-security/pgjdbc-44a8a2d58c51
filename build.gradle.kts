@@ -15,6 +15,18 @@ import de.thetaphi.forbiddenapis.gradle.CheckForbiddenApis
 import de.thetaphi.forbiddenapis.gradle.CheckForbiddenApisExtension
 import org.postgresql.buildtools.JavaCommentPreprocessorTask
 
+buildscript {
+    // grgit 4.0.1 (pulled in by stage-vote-release 1.82) was published only to the retired JCenter,
+    // so resolve the Maven Central 4.1.1 release instead
+    configurations.classpath {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "org.ajoberstar.grgit") {
+                useVersion("4.1.1")
+            }
+        }
+    }
+}
+
 plugins {
     publishing
     // Verification

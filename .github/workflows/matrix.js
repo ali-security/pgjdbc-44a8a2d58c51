@@ -45,9 +45,9 @@ matrix.addAxis({
   name: 'pg_version',
   title: x => 'PG ' + x,
   // Strings allow versions like 18-ea
+  // 8.4 and 9.0 are dropped: their Docker Hub images use the schema-v1 manifest format
+  // that current Docker/containerd can no longer pull
   values: [
-    '8.4',
-    '9.0',
     '9.1',
     '9.2',
     '9.3',
