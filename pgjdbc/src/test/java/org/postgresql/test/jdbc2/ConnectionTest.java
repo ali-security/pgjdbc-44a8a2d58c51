@@ -25,6 +25,7 @@ import org.junit.Test;
 
 import java.lang.reflect.Field;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -544,6 +545,65 @@ public class ConnectionTest {
     assertTrue(newStream.getSocket().getKeepAlive());
 
     TestUtil.closeDB(con);
+  }
+
+  /**
+   * A NUL in a startup parameter would split it and inject further startup parameters
+   * (for instance another user or replication=database), so it must be refused.
+   */
+  @Test
+  public void testNulInApplicationNameIsRejected() throws Exception {
+    // The test URL already carries ApplicationName, so override it in the URL itself; %00
+    // decodes to a NUL. application_name only travels in the startup packet when a 9.0+
+    // server is assumed.
+    String url = TestUtil.getURL()
+        + "&assumeMinServerVersion=9.0&ApplicationName=app%00user%00postgres";
+    Properties props = new Properties();
+    PGProperty.USER.set(props, TestUtil.getUser());
+    PGProperty.PASSWORD.set(props, TestUtil.getPassword() != null ? TestUtil.getPassword() : "");
+    PGProperty.GSS_ENC_MODE.set(props, TestUtil.getGSSEncMode().value);
+    String sslPassword = TestUtil.getSslPassword();
+    if (sslPassword != null) {
+      PGProperty.SSL_PASSWORD.set(props, sslPassword);
+    }
+    TestUtil.initDriver();
+    Connection conn = null;
+    try {
+      conn = DriverManager.getConnection(url, props);
+      fail("A startup parameter containing a NUL character must be rejected");
+    } catch (SQLException e) {
+      assertEquals(PSQLState.INVALID_PARAMETER_VALUE.getState(), e.getSQLState());
+      assertStringContains(e.getMessage(), "NUL");
+    } finally {
+      TestUtil.closeDB(conn);
+    }
+  }
+
+  @Test
+  public void testNulInOptionsIsRejected() throws Exception {
+    Properties props = new Properties();
+    PGProperty.OPTIONS.set(props, "-c search_path=public\u0000replication\u0000database");
+    assertNulStartupParameterRejected(props);
+  }
+
+  @Test
+  public void testNulInCurrentSchemaIsRejected() throws Exception {
+    Properties props = new Properties();
+    PGProperty.CURRENT_SCHEMA.set(props, "public\u0000user\u0000postgres");
+    assertNulStartupParameterRejected(props);
+  }
+
+  private static void assertNulStartupParameterRejected(Properties props) throws Exception {
+    Connection conn = null;
+    try {
+      conn = TestUtil.openDB(props);
+      fail("A startup parameter containing a NUL character must be rejected");
+    } catch (SQLException e) {
+      assertEquals(PSQLState.INVALID_PARAMETER_VALUE.getState(), e.getSQLState());
+      assertStringContains(e.getMessage(), "NUL");
+    } finally {
+      TestUtil.closeDB(conn);
+    }
   }
 
   private static void assertStringContains(String orig, String toContain) {
